@@ -3,6 +3,7 @@
 Coloring-book app for Android tablets and phones, built for stylus use (Xiaomi Pad 6 + Xiaomi Smart Pen, Samsung S Pen, any Android active stylus).
 
 ## Features
+- 22 built-in coloring pages (10 mandala styles, 12 original kids' cartoons), drawn in code.
 - Import any picture (gallery/files, or "Share → BB Coloring Book").
 - Fill tool: tap a region to fill it.
 - Brush: pressure-sensitive stylus strokes.

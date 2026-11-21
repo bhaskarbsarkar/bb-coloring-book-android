@@ -94,7 +94,7 @@ class MainActivity : Activity(), ColoringView.Listener {
         val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         top.addView(button("📚", "My Drawings") { showDrawings() })
         top.addView(button("📂", "New from picture") { openPicker() })
-        top.addView(button("🌸", "New mandala") { startProject(SampleArt.mandala(), "Mandala") })
+        top.addView(button("🌸", "Coloring pages") { showPagesPicker() })
         top.addView(divider())
         undoBtn = button("↶", "Undo") { canvasView.undo() }.also { top.addView(it) }
         redoBtn = button("↷", "Redo") { canvasView.redo() }.also { top.addView(it) }
@@ -437,6 +437,7 @@ class MainActivity : Activity(), ColoringView.Listener {
     internal val openProjectId get() = currentId
     internal fun newProjectForTest(art: Bitmap, name: String) = startProject(art, name)
     internal fun openProjectForTest(id: String) = openProject(id)
+    internal fun showPagesPickerForTest() = showPagesPicker()
 
     private fun showDrawings() {
         saveCurrent()
@@ -515,7 +516,55 @@ class MainActivity : Activity(), ColoringView.Listener {
             .setTitle(if (compact) "My Drawings" else "My Drawings  ·  tap to open, long-press to rename/delete")
             .setView(content)
             .setPositiveButton("New from picture") { _, _ -> openPicker() }
-            .setNeutralButton("New mandala") { _, _ -> startProject(SampleArt.mandala(), "Mandala") }
+            .setNeutralButton("Coloring pages") { _, _ -> showPagesPicker() }
+            .setNegativeButton("Close", null)
+            .show()
+        dialog.window?.setLayout((resources.displayMetrics.widthPixels * if (compact) 0.95 else 0.85).toInt(), (resources.displayMetrics.heightPixels * 0.85).toInt())
+    }
+
+    private val thumbCache = HashMap<String, Bitmap>()
+
+    /** Built-in pages (mandalas + kids), grouped, with thumbnails rendered in the background. */
+    private fun showPagesPicker() {
+        var dialog: AlertDialog? = null
+        val dialogWidthDp = resources.configuration.screenWidthDp * (if (compact) 0.95f else 0.85f) - 48
+        val cols = (dialogWidthDp / 150).toInt().coerceIn(2, 6)
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), 0, dp(16), dp(8)) }
+        for (cat in ColoringPages.Category.values()) {
+            box.addView(TextView(this).apply {
+                text = cat.title; textSize = 17f; setTextColor(Color.BLACK); setPadding(dp(4), dp(12), 0, dp(6))
+            })
+            var row: LinearLayout? = null
+            ColoringPages.all.filter { it.category == cat }.forEachIndexed { i, page ->
+                if (i % cols == 0) row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }.also {
+                    box.addView(it, LinearLayout.LayoutParams(-1, -2))
+                }
+                val img = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
+                val card = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
+                    setPadding(dp(6), dp(6), dp(6), dp(6))
+                    background = GradientDrawable().apply { cornerRadius = 12 * d; setColor(Color.WHITE); setStroke(dp(1), 0x22000000) }
+                    addView(img, LinearLayout.LayoutParams(-1, dp(if (compact) 120 else 140)))
+                    addView(TextView(context).apply { text = page.name; textSize = 14f; setTextColor(Color.BLACK); gravity = Gravity.CENTER })
+                    contentDescription = page.name
+                    setOnClickListener {
+                        dialog?.dismiss()
+                        io.execute { val bmp = ColoringPages.render(page); main.post { startProject(bmp, page.name) } }
+                    }
+                }
+                row!!.addView(card, LinearLayout.LayoutParams(0, -2, 1f).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
+                thumbCache[page.id]?.let { img.setImageBitmap(it) } ?: io.execute {
+                    val t = ColoringPages.render(page, 300)
+                    main.post { thumbCache[page.id] = t; img.setImageBitmap(t) }
+                }
+            }
+            // pad the last row so cards keep the same width
+            val n = ColoringPages.all.count { it.category == cat }
+            repeat((cols - n % cols) % cols) { row!!.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f).apply { setMargins(dp(4), 0, dp(4), 0) }) }
+        }
+        dialog = AlertDialog.Builder(this)
+            .setTitle("Coloring pages  ·  tap one to start")
+            .setView(ScrollView(this).apply { addView(box) })
             .setNegativeButton("Close", null)
             .show()
         dialog.window?.setLayout((resources.displayMetrics.widthPixels * if (compact) 0.95 else 0.85).toInt(), (resources.displayMetrics.heightPixels * 0.85).toInt())
