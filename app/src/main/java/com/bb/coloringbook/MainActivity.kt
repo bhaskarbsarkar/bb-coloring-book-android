@@ -26,6 +26,7 @@ class MainActivity : Activity(), ColoringView.Listener {
     private lateinit var redoBtn: Button
     private lateinit var penBtn: Button
     private lateinit var insideBtn: Button
+    private lateinit var backupBtn: Button
     private val toolButtons = mutableMapOf<Tool, Button>()
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
@@ -46,7 +47,7 @@ class MainActivity : Activity(), ColoringView.Listener {
         0xFF4E342E, 0xFF8D6E63, 0xFFD7B19D, 0xFFFFE0BD, 0xFFF1C27D, 0xFFC68642,
     ).map { it.toInt() }.toIntArray()
 
-    companion object { private const val REQ_OPEN = 1; private const val MAX_DIM = 2048 }
+    companion object { private const val REQ_OPEN = 1; private const val REQ_RESTORE = 2; private const val MAX_DIM = 2048 }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,6 +61,7 @@ class MainActivity : Activity(), ColoringView.Listener {
 
         val incoming = incomingUri(intent)
         restoreLastProject(openAfter = incoming)
+        if (!prefs.getBoolean("warnedUninstall", false)) main.postDelayed({ showUninstallWarning() }, 1200)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -85,6 +87,7 @@ class MainActivity : Activity(), ColoringView.Listener {
         // ---- top toolbar ----
         val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         top.addView(button("📚 My Drawings") { showDrawings() })
+        backupBtn = button("⚠ Back up") { showBackupDialog() }.also { top.addView(it) }
         top.addView(button("📂 New from picture") { openPicker() })
         top.addView(button("🌸 New mandala") { startProject(SampleArt.mandala(), "Mandala") })
         top.addView(divider())
@@ -284,6 +287,7 @@ class MainActivity : Activity(), ColoringView.Listener {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_OPEN && resultCode == RESULT_OK) data?.data?.let { loadUri(it) }
+        if (requestCode == REQ_RESTORE && resultCode == RESULT_OK) data?.data?.let { restoreBackup(it) }
     }
 
     private fun loadUri(uri: Uri) {
@@ -340,7 +344,7 @@ class MainActivity : Activity(), ColoringView.Listener {
         val id = currentId ?: return
         val paint = canvasView.paintLayer?.copy(Bitmap.Config.ARGB_8888, false) ?: return
         val preview = canvasView.renderResult() ?: return
-        io.execute { runCatching { store.saveProgress(id, paint, preview) } }
+        io.execute { runCatching { store.saveProgress(id, paint, preview) }; updateBackupState() }
     }
 
     /** Saves the open drawing, then starts a new one from [art]. */
@@ -487,6 +491,145 @@ class MainActivity : Activity(), ColoringView.Listener {
     }
 
     override fun onPause() { super.onPause(); saveCurrent() }
+
+    override fun onResume() { super.onResume(); io.execute { updateBackupState() } }
+
+    // =====================================================================================
+    // Backup guardrail (drawings live inside the app and are deleted on uninstall)
+    // =====================================================================================
+
+    /** Call on the io thread. Highlights the backup button when there are unbacked changes. */
+    private fun updateBackupState() {
+        val pending = store.lastChange() > prefs.getLong("lastBackup", 0L)
+        main.post {
+            if (!::backupBtn.isInitialized) return@post
+            backupBtn.text = if (pending) "⚠ Back up" else "✅ Backed up"
+            backupBtn.setTextColor(if (pending) 0xFFB3261E.toInt() else 0xFF1B5E20.toInt())
+            backupBtn.background = roundRect(if (pending) 0xFFFFDAD6.toInt() else Color.TRANSPARENT)
+        }
+    }
+
+    internal fun showUninstallWarning() {
+        prefs.edit().putBoolean("warnedUninstall", true).apply()
+        AlertDialog.Builder(this)
+            .setTitle("⚠ Keep your drawings safe")
+            .setMessage(
+                "Your drawings are stored inside this app. Uninstalling the app (or clearing its data) " +
+                "deletes them permanently.\n\n" +
+                "Android doesn't let apps show their own warning at uninstall time, so:\n" +
+                "• Use the ⚠ Back up button to save a backup file to your Downloads folder. " +
+                "It survives uninstalling and can be restored later.\n" +
+                "• If Android asks \"Keep app data?\" when uninstalling, tick it.\n\n" +
+                "The button turns red whenever you have changes that aren't backed up."
+            )
+            .setPositiveButton("Back up now") { _, _ -> backupZip() }
+            .setNegativeButton("Got it", null)
+            .show()
+    }
+
+    private fun showBackupDialog() {
+        var dialog: AlertDialog? = null
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(8), dp(24), dp(8)) }
+        val last = prefs.getLong("lastBackup", 0L)
+        box.addView(TextView(this).apply {
+            textSize = 15f
+            text = "⚠ Uninstalling this app deletes all drawings stored in it. Keep a backup outside the app.\n\n" +
+                "Last backup: " + (if (last == 0L) "never" else java.text.DateFormat.getDateTimeInstance().format(java.util.Date(last)))
+        })
+        fun action(title: String, sub: String, run: () -> Unit) {
+            box.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(12))
+                background = roundRect(0xFFF3EDF7.toInt())
+                addView(TextView(context).apply { text = title; textSize = 17f; setTextColor(Color.BLACK) })
+                addView(TextView(context).apply { text = sub; textSize = 13f })
+                setOnClickListener { dialog?.dismiss(); run() }
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+        }
+        action("💾 Save backup file (recommended)",
+            "One .zip in Download/BB Coloring Book with every drawing. Restore it later to keep coloring.") { backupZip() }
+        action("🖼 Export all as PNG pictures",
+            "Finished pictures go to Pictures/BB Coloring Book. Good for sharing, but they can't be resumed.") { exportAllPng() }
+        action("♻ Restore from backup file",
+            "Adds the drawings from a backup .zip. Drawings already here are kept.") { pickBackupFile() }
+        dialog = AlertDialog.Builder(this).setTitle("Back up your drawings")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setNegativeButton("Close", null).show()
+    }
+
+    private fun backupZip() {
+        saveCurrent()
+        toast("Creating backup…")
+        io.execute { // runs after the pending save
+            val stamp = java.text.SimpleDateFormat("yyyy-MM-dd_HHmm", java.util.Locale.US).format(java.util.Date())
+            val result = runCatching {
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, "BBColoringBook-backup-$stamp.zip")
+                    put(MediaStore.MediaColumns.MIME_TYPE, "application/zip")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/BB Coloring Book")
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)!!
+                val n = contentResolver.openOutputStream(uri)!!.use { store.exportZip(it) }
+                values.clear(); values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                contentResolver.update(uri, values, null, null)
+                n
+            }
+            if (result.isSuccess) prefs.edit().putLong("lastBackup", System.currentTimeMillis()).apply()
+            updateBackupState()
+            main.post {
+                if (result.isSuccess) toast("Backed up ${result.getOrNull()} drawing(s) to Download/BB Coloring Book")
+                else toast("Backup failed: ${result.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
+    private fun exportAllPng() {
+        saveCurrent()
+        toast("Exporting pictures…")
+        io.execute {
+            var ok = 0
+            val projects = store.list()
+            for (p in projects) runCatching {
+                val bmp = store.render(p.id)!!
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, "${p.name.replace(Regex("[^A-Za-z0-9 _-]"), "_")}.png")
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/BB Coloring Book")
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+                val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)!!
+                contentResolver.openOutputStream(uri)!!.use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                contentResolver.update(uri, values, null, null)
+                ok++
+            }
+            main.post { toast("Exported $ok of ${projects.size} picture(s) to Pictures/BB Coloring Book") }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun pickBackupFile() {
+        val i = Intent(Intent.ACTION_GET_CONTENT).apply {
+            type = "*/*"; addCategory(Intent.CATEGORY_OPENABLE)
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
+        }
+        startActivityForResult(Intent.createChooser(i, "Choose a BB Coloring Book backup (.zip)"), REQ_RESTORE)
+    }
+
+    internal fun restoreBackup(uri: Uri) {
+        saveCurrent()
+        io.execute {
+            val r = runCatching { contentResolver.openInputStream(uri)!!.use { store.importZip(it) } }
+            main.post {
+                val n = r.getOrNull()
+                when {
+                    n == null -> toast("That file isn't a valid backup")
+                    n == 0 -> toast("Nothing new to restore (drawings already here)")
+                    else -> { toast("Restored $n drawing(s)"); showDrawings() }
+                }
+            }
+        }
+    }
 
     override fun onDestroy() { super.onDestroy(); io.shutdown() }
 }

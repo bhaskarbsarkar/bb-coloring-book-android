@@ -12,6 +12,9 @@ Coloring-book app for tablets, built for stylus use (tested target: Xiaomi Pad 6
 - Any color: HSV picker + hex input; recent colors remembered.
 - My Drawings: multiple saved drawings, each resumable later (thumbnails, rename, delete).
   Progress autosaves a few seconds after each change and when leaving the app; "Save" saves now.
+- Backup guardrail: ⚠ Back up button (red when changes aren't backed up) saves a restorable .zip to
+  Download/BB Coloring Book, exports all drawings as PNG, or restores a backup. One-time warning that
+  uninstalling deletes drawings; Android's uninstall dialog offers "Keep app data" (hasFragileUserData).
 - Eyedropper, undo/redo, clear, export PNG to Pictures/BB Coloring Book.
 
 ## Build

@@ -1,8 +1,12 @@
 package com.bb.coloringbook
 
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.graphics.*
 import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 /**
  * Saved drawings. Each project is a folder: art.png (original picture), paint.png (colors),
@@ -59,6 +63,72 @@ class ProjectStore(root: File) {
     fun rename(id: String, name: String) { if (folder(id).exists()) File(folder(id), "name.txt").writeText(name) }
 
     fun delete(id: String) { folder(id).deleteRecursively() }
+
+    /** Finished picture of a project: colors with outlines multiplied on top. */
+    fun render(id: String): Bitmap? {
+        val (art, paint) = load(id) ?: return null
+        val out = Bitmap.createBitmap(art.width, art.height, Bitmap.Config.ARGB_8888)
+        val c = Canvas(out)
+        c.drawColor(Color.WHITE)
+        paint?.let { c.drawBitmap(it, 0f, 0f, null) }
+        c.drawBitmap(art, 0f, 0f, Paint().apply { blendMode = BlendMode.MULTIPLY })
+        return out
+    }
+
+    /** Writes every project into one zip that [importZip] can restore. */
+    fun exportZip(out: OutputStream): Int {
+        val projects = list()
+        ZipOutputStream(out.buffered()).use { zip ->
+            for (p in projects) for (name in FILES) {
+                val f = File(folder(p.id), name)
+                if (!f.exists()) continue
+                zip.putNextEntry(ZipEntry("${p.id}/$name"))
+                f.inputStream().use { it.copyTo(zip) }
+                zip.closeEntry()
+            }
+        }
+        return projects.size
+    }
+
+    /** Restores projects from a backup zip. Existing drawings are kept. Returns count added. */
+    fun importZip(input: InputStream): Int {
+        val staged = HashMap<String, File>() // zip id -> temp folder
+        val tmpRoot = File(dir.parentFile, "import_tmp").apply { deleteRecursively(); mkdirs() }
+        try {
+            ZipInputStream(input.buffered()).use { zip ->
+                while (true) {
+                    val e = zip.nextEntry ?: break
+                    val m = ENTRY.matchEntire(e.name) ?: continue // ignores anything unexpected
+                    val (zid, name) = m.destructured
+                    val f = staged.getOrPut(zid) { File(tmpRoot, zid).apply { mkdirs() } }
+                    File(f, name).outputStream().use { zip.copyTo(it) }
+                }
+            }
+            var added = 0
+            for ((zid, f) in staged) {
+                if (!File(f, "art.png").exists()) continue
+                // Same drawing already here? Keep both only if it differs; skip exact duplicates.
+                val target = if (!folder(zid).exists()) folder(zid) else {
+                    val same = File(folder(zid), "paint.png").let { it.exists() && File(f, "paint.png").exists() && it.length() == File(f, "paint.png").length() }
+                    if (same) continue
+                    folder("${System.currentTimeMillis()}${added}")
+                }
+                f.copyRecursively(target, overwrite = true)
+                added++
+            }
+            return added
+        } finally {
+            tmpRoot.deleteRecursively()
+        }
+    }
+
+    /** Latest change time over all projects (0 if none). */
+    fun lastChange(): Long = list().maxOfOrNull { it.updated } ?: 0L
+
+    companion object {
+        private val FILES = listOf("art.png", "paint.png", "thumb.jpg", "name.txt")
+        private val ENTRY = Regex("""([A-Za-z0-9_-]{1,40})/(art\.png|paint\.png|thumb\.jpg|name\.txt)""")
+    }
 
     private fun writePng(b: Bitmap, f: File) = atomicWrite(f) { b.compress(Bitmap.CompressFormat.PNG, 100, it) }
 
