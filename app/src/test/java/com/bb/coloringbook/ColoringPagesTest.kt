@@ -24,10 +24,15 @@ import java.time.Duration
 class ColoringPagesTest {
     private fun settle() { repeat(10) { Thread.sleep(150); shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(300)) } }
 
-    @Test fun twentyTwoPagesInTwoGroups() {
+    @Test fun seventyPagesInTenCategories() {
         val pages = ColoringPages.all
+        assertEquals(70, pages.size)
         assertEquals(10, pages.count { it.category == ColoringPages.Category.MANDALA })
         assertEquals(12, pages.count { it.category == ColoringPages.Category.KIDS })
+        for (c in ColoringPages.Category.values()) if (c != ColoringPages.Category.MANDALA && c != ColoringPages.Category.KIDS)
+            assertEquals(c.title, 6, pages.count { it.category == c })
+        assertEquals(ColoringPages.Category.MANDALA, pages.first().category)
+        assertEquals(ColoringPages.Category.KIDS, pages.last().category)
         assertEquals(pages.size, pages.map { it.id }.toSet().size)
     }
 

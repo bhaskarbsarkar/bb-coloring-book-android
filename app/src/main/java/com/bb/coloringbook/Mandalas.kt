@@ -1,15 +1,15 @@
 package com.bb.coloringbook
 
 import com.bb.coloringbook.Pen.Companion.ang
-import com.bb.coloringbook.Pen.Companion.px
-import com.bb.coloringbook.Pen.Companion.py
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
-/** Ring-shape building blocks for mandalas, in 100x100 units centred at (50,50). */
-private class M(val p: Pen) {
-    fun ring(r: Float) = p.circle(50f, 50f, r)
+/** Ring-shape building blocks for mandalas, in 100x100 units centred at (cx, cy). */
+internal class M(val p: Pen, val cx: Float = 50f, val cy: Float = 50f) {
+    fun px(a: Double, r: Float) = cx + (cos(a) * r).toFloat()
+    fun py(a: Double, r: Float) = cy + (sin(a) * r).toFloat()
+    fun ring(r: Float) = p.circle(cx, cy, r)
 
     /** Pointed lens petals between radii r0..r1. */
     fun petals(n: Int, r0: Float, r1: Float, w: Float, phase: Double = 0.0) {

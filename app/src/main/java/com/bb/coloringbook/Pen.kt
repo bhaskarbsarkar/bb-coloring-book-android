@@ -35,25 +35,30 @@ class Pen(private val c: Canvas, private val s: Float, lineWidth: Float) {
         c.drawArc(l * s, t * s, r * s, b * s, start, sweep, false, stroke)
 
     /** Path in units. [whiteFill] paints the inside white first so it covers lines behind. */
-    fun path(whiteFill: Boolean = false, solid: Boolean = false, build: PathB.() -> Unit) {
-        val b = PathB(s).apply(build)
+    fun path(whiteFill: Boolean = false, solid: Boolean = false, k: Float = 1f, ox: Float = 0f, oy: Float = 0f, build: PathB.() -> Unit) {
+        val b = PathB(s, k, ox, oy).apply(build)
         if (solid) { c.drawPath(b.p, fill); return }
         if (whiteFill) c.drawPath(b.p, white)
         c.drawPath(b.p, stroke)
     }
 
     /** Draw [block] clipped to the shape built by [shape] (for stripes/patterns inside a shape). */
-    fun clip(shape: PathB.() -> Unit, block: () -> Unit) {
-        c.save(); c.clipPath(PathB(s).apply(shape).p); block(); c.restore()
+    fun clip(shape: PathB.() -> Unit, block: () -> Unit) = clipK(1f, 0f, 0f, shape, block)
+    /** Clip to [shape] scaled by [k] about (ox, oy). */
+    fun clipK(k: Float, ox: Float, oy: Float, shape: PathB.() -> Unit, block: () -> Unit) {
+        c.save(); c.clipPath(PathB(s, k, ox, oy).apply(shape).p); block(); c.restore()
     }
 
-    class PathB(private val s: Float) {
+    /** Path builder in units, optionally scaled by [k] about (ox, oy). */
+    class PathB(private val s: Float, private val k: Float = 1f, private val ox: Float = 0f, private val oy: Float = 0f) {
         val p = Path()
-        fun m(x: Float, y: Float) = p.moveTo(x * s, y * s)
-        fun l(x: Float, y: Float) = p.lineTo(x * s, y * s)
-        fun q(cx: Float, cy: Float, x: Float, y: Float) = p.quadTo(cx * s, cy * s, x * s, y * s)
+        private fun X(x: Float) = (ox + (x - ox) * k) * s
+        private fun Y(y: Float) = (oy + (y - oy) * k) * s
+        fun m(x: Float, y: Float) = p.moveTo(X(x), Y(y))
+        fun l(x: Float, y: Float) = p.lineTo(X(x), Y(y))
+        fun q(cx: Float, cy: Float, x: Float, y: Float) = p.quadTo(X(cx), Y(cy), X(x), Y(y))
         fun c(x1: Float, y1: Float, x2: Float, y2: Float, x: Float, y: Float) =
-            p.cubicTo(x1 * s, y1 * s, x2 * s, y2 * s, x * s, y * s)
+            p.cubicTo(X(x1), Y(y1), X(x2), Y(y2), X(x), Y(y))
         fun z() = p.close()
     }
 
