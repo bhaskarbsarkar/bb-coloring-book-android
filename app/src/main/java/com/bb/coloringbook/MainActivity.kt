@@ -32,6 +32,9 @@ class MainActivity : Activity(), ColoringView.Listener {
     private val prefs by lazy { getSharedPreferences("bb", MODE_PRIVATE) }
     private val recent = mutableListOf<Int>()
     private val d get() = resources.displayMetrics.density
+    private val store by lazy { ProjectStore(filesDir) }
+    private var currentId: String? = null
+    private val autoSave = Runnable { saveCurrent() }
 
     private val palette = longArrayOf(
         0xFF000000, 0xFF424242, 0xFF9E9E9E, 0xFFFFFFFF,
@@ -56,7 +59,7 @@ class MainActivity : Activity(), ColoringView.Listener {
         refreshUi()
 
         val incoming = incomingUri(intent)
-        if (incoming != null) loadUri(incoming) else restoreAutosave()
+        restoreLastProject(openAfter = incoming)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -81,8 +84,9 @@ class MainActivity : Activity(), ColoringView.Listener {
 
         // ---- top toolbar ----
         val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        top.addView(button("📂 Open") { openPicker() })
-        top.addView(button("🌸 Sample") { confirm("Load the sample mandala? Current coloring is replaced.") { canvasView.setImage(SampleArt.mandala()) } })
+        top.addView(button("📚 My Drawings") { showDrawings() })
+        top.addView(button("📂 New from picture") { openPicker() })
+        top.addView(button("🌸 New mandala") { startProject(SampleArt.mandala(), "Mandala") })
         top.addView(divider())
         undoBtn = button("↶ Undo") { canvasView.undo() }.also { top.addView(it) }
         redoBtn = button("↷ Redo") { canvasView.redo() }.also { top.addView(it) }
@@ -102,7 +106,8 @@ class MainActivity : Activity(), ColoringView.Listener {
         top.addView(divider())
         top.addView(button("⤢ Fit") { canvasView.fitToView() })
         top.addView(button("🗑 Clear") { confirm("Remove all colors?") { canvasView.clearColors() } })
-        top.addView(button("💾 Save") { saveToGallery() })
+        top.addView(button("💾 Save") { saveCurrent(); toast("Progress saved") })
+        top.addView(button("🖼 Export") { saveToGallery() })
         root.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(top) },
             LinearLayout.LayoutParams(-1, -2))
 
@@ -260,7 +265,10 @@ class MainActivity : Activity(), ColoringView.Listener {
         prefs.edit().putBoolean("penOnly", true).apply()
         main.post { refreshUi(); toast("Stylus detected: pen draws, fingers move & zoom") }
     }
-    override fun onHistoryChanged(canUndo: Boolean, canRedo: Boolean) { if (::undoBtn.isInitialized) refreshUi() }
+    override fun onHistoryChanged(canUndo: Boolean, canRedo: Boolean) {
+        if (::undoBtn.isInitialized) refreshUi()
+        if (canUndo) { main.removeCallbacks(autoSave); main.postDelayed(autoSave, 3000) }
+    }
 
     // =====================================================================================
     // Import / export
@@ -292,7 +300,7 @@ class MainActivity : Activity(), ColoringView.Listener {
             }.getOrNull()
             main.post {
                 if (bmp == null) toast("Could not open that picture")
-                else canvasView.setImage(bmp)
+                else startProject(bmp, displayName(uri))
             }
         }
     }
@@ -316,37 +324,169 @@ class MainActivity : Activity(), ColoringView.Listener {
         }
     }
 
-    // ---- autosave of work in progress ----
-    private val artFile get() = File(filesDir, "current_art.png")
-    private val paintFile get() = File(filesDir, "current_paint.png")
+    // =====================================================================================
+    // Saved drawings (projects)
+    // =====================================================================================
 
-    override fun onPause() {
-        super.onPause()
-        val art = canvasView.lineArt ?: return
-        val artCopy = art.copy(Bitmap.Config.ARGB_8888, false)
-        val paintCopy = canvasView.paintLayer!!.copy(Bitmap.Config.ARGB_8888, false)
-        io.execute {
-            runCatching {
-                writePng(artCopy, artFile); writePng(paintCopy, paintFile)
-            }
+    private fun displayName(uri: Uri): String = runCatching {
+        contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+            if (it.moveToFirst()) it.getString(0) else null
         }
+    }.getOrNull()?.substringBeforeLast('.')?.takeIf { it.isNotBlank() } ?: "Drawing"
+
+    /** Saves the colors of the open drawing in the background. */
+    private fun saveCurrent() {
+        main.removeCallbacks(autoSave)
+        val id = currentId ?: return
+        val paint = canvasView.paintLayer?.copy(Bitmap.Config.ARGB_8888, false) ?: return
+        val preview = canvasView.renderResult() ?: return
+        io.execute { runCatching { store.saveProgress(id, paint, preview) } }
     }
 
-    private fun writePng(b: Bitmap, f: File) {
-        val tmp = File(f.path + ".tmp")
-        tmp.outputStream().use { b.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        tmp.renameTo(f)
-    }
-
-    private fun restoreAutosave() {
+    /** Saves the open drawing, then starts a new one from [art]. */
+    private fun startProject(art: Bitmap, name: String) {
+        saveCurrent()
         io.execute {
-            val art = if (artFile.exists()) BitmapFactory.decodeFile(artFile.path) else null
-            val paint = if (art != null && paintFile.exists()) BitmapFactory.decodeFile(paintFile.path) else null
+            val id = runCatching { store.create(art, name) }.getOrNull()
             main.post {
-                if (art != null) canvasView.setImage(art, paint) else canvasView.setImage(SampleArt.mandala())
+                if (id == null) { toast("Could not create drawing"); return@post }
+                currentId = id; prefs.edit().putString("current", id).apply()
+                canvasView.setImage(art)
+                saveCurrent()
             }
         }
     }
+
+    private fun openProject(id: String) {
+        if (id == currentId) return
+        saveCurrent()
+        io.execute {
+            val data = runCatching { store.load(id) }.getOrNull()
+            main.post {
+                if (data == null) { toast("Could not open drawing"); return@post }
+                currentId = id; prefs.edit().putString("current", id).apply()
+                canvasView.setImage(data.first, data.second)
+            }
+        }
+    }
+
+    private fun restoreLastProject(openAfter: Uri?) {
+        io.execute {
+            // One-time migration from the single autosave of version 1.0.
+            val oldArt = File(filesDir, "current_art.png"); val oldPaint = File(filesDir, "current_paint.png")
+            if (oldArt.exists()) runCatching {
+                val art = BitmapFactory.decodeFile(oldArt.path)
+                val paint = if (oldPaint.exists()) BitmapFactory.decodeFile(oldPaint.path) else null
+                val id = store.create(art, "My first drawing")
+                if (paint != null) store.saveProgress(id, paint, paint)
+                prefs.edit().putString("current", id).apply()
+                oldArt.delete(); oldPaint.delete()
+            }
+            val wanted = prefs.getString("current", null)
+            val id = if (store.exists(wanted)) wanted else store.list().firstOrNull()?.id
+            main.post {
+                when {
+                    openAfter != null -> loadUri(openAfter)
+                    id != null -> openProject(id)
+                    else -> startProject(SampleArt.mandala(), "Mandala")
+                }
+            }
+        }
+    }
+
+    /** For tests. */
+    internal val projectStore get() = store
+    internal val openProjectId get() = currentId
+    internal fun newProjectForTest(art: Bitmap, name: String) = startProject(art, name)
+    internal fun openProjectForTest(id: String) = openProject(id)
+
+    private fun showDrawings() {
+        saveCurrent()
+        // Wait for the pending save so the current thumbnail is fresh.
+        io.execute { val list = store.list(); main.post { showDrawingsDialog(list) } }
+    }
+
+    private fun showDrawingsDialog(projects: List<ProjectStore.Project>) {
+        var dialog: AlertDialog? = null
+        val fmt = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT)
+        val grid = GridView(this).apply {
+            numColumns = GridView.AUTO_FIT; columnWidth = dp(180)
+            horizontalSpacing = dp(12); verticalSpacing = dp(12); stretchMode = GridView.STRETCH_COLUMN_WIDTH
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+        }
+        grid.adapter = object : BaseAdapter() {
+            override fun getCount() = projects.size
+            override fun getItem(i: Int) = projects[i]
+            override fun getItemId(i: Int) = i.toLong()
+            override fun getView(i: Int, convert: View?, parent: android.view.ViewGroup): View {
+                val p = projects[i]
+                val card = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL; setPadding(dp(8), dp(8), dp(8), dp(8))
+                    background = GradientDrawable().apply {
+                        cornerRadius = 12 * d; setColor(Color.WHITE)
+                        if (p.id == currentId) setStroke(dp(3), 0xFF6750A4.toInt()) else setStroke(dp(1), 0x22000000)
+                    }
+                }
+                val img = ImageView(this@MainActivity).apply {
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                    if (p.thumb.exists()) setImageBitmap(BitmapFactory.decodeFile(p.thumb.path))
+                }
+                card.addView(img, LinearLayout.LayoutParams(-1, dp(150)))
+                card.addView(TextView(this@MainActivity).apply {
+                    text = if (p.id == currentId) "${p.name}  (open)" else p.name
+                    textSize = 15f; setTextColor(Color.BLACK); maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+                card.addView(TextView(this@MainActivity).apply { text = fmt.format(java.util.Date(p.updated)); textSize = 12f })
+                return card
+            }
+        }
+        grid.setOnItemClickListener { _, _, i, _ -> dialog?.dismiss(); openProject(projects[i].id) }
+        grid.setOnItemLongClickListener { _, _, i, _ -> dialog?.dismiss(); projectOptions(projects[i]); true }
+
+        val content: View = if (projects.isEmpty()) TextView(this).apply {
+            text = "No saved drawings yet."; setPadding(dp(24), dp(24), dp(24), dp(24))
+        } else grid
+        dialog = AlertDialog.Builder(this)
+            .setTitle("My Drawings  ·  tap to open, long-press to rename/delete")
+            .setView(content)
+            .setPositiveButton("New from picture") { _, _ -> openPicker() }
+            .setNeutralButton("New mandala") { _, _ -> startProject(SampleArt.mandala(), "Mandala") }
+            .setNegativeButton("Close", null)
+            .show()
+        dialog.window?.setLayout((resources.displayMetrics.widthPixels * 0.85).toInt(), (resources.displayMetrics.heightPixels * 0.85).toInt())
+    }
+
+    private fun projectOptions(p: ProjectStore.Project) {
+        AlertDialog.Builder(this).setTitle(p.name)
+            .setItems(arrayOf("Open", "Rename", "Delete")) { _, which ->
+                when (which) {
+                    0 -> openProject(p.id)
+                    1 -> {
+                        val input = EditText(this).apply { setText(p.name); setSingleLine(); selectAll() }
+                        AlertDialog.Builder(this).setTitle("Rename").setView(input)
+                            .setPositiveButton("OK") { _, _ ->
+                                val n = input.text.toString().trim()
+                                if (n.isNotEmpty()) io.execute { store.rename(p.id, n); main.post { showDrawings() } }
+                            }.setNegativeButton("Cancel", null).show()
+                    }
+                    2 -> confirm("Delete \"${p.name}\"? This cannot be undone.") {
+                        val wasOpen = p.id == currentId
+                        if (wasOpen) { currentId = null; main.removeCallbacks(autoSave) }
+                        io.execute {
+                            store.delete(p.id)
+                            val next = store.list().firstOrNull()?.id
+                            main.post {
+                                if (wasOpen) { if (next != null) openProject(next) else startProject(SampleArt.mandala(), "Mandala") }
+                                showDrawings()
+                            }
+                        }
+                    }
+                }
+            }.show()
+    }
+
+    override fun onPause() { super.onPause(); saveCurrent() }
 
     override fun onDestroy() { super.onDestroy(); io.shutdown() }
 }

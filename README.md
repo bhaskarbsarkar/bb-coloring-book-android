@@ -10,7 +10,9 @@ Coloring-book app for tablets, built for stylus use (tested target: Xiaomi Pad 6
 - Pen-only mode (auto on when a stylus is detected): pen draws, fingers pan/pinch-zoom, palm is ignored.
 - Stylus side button or eraser tip = eraser. Hover shows a brush cursor.
 - Any color: HSV picker + hex input; recent colors remembered.
-- Eyedropper, undo/redo, clear, autosave, export PNG to Pictures/BB Coloring Book.
+- My Drawings: multiple saved drawings, each resumable later (thumbnails, rename, delete).
+  Progress autosaves a few seconds after each change and when leaving the app; "Save" saves now.
+- Eyedropper, undo/redo, clear, export PNG to Pictures/BB Coloring Book.
 
 ## Build
 ```
