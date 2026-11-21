@@ -26,7 +26,6 @@ class MainActivity : Activity(), ColoringView.Listener {
     private lateinit var redoBtn: Button
     private lateinit var penBtn: Button
     private lateinit var insideBtn: Button
-    private lateinit var backupBtn: Button
     private val toolButtons = mutableMapOf<Tool, Button>()
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
@@ -61,7 +60,6 @@ class MainActivity : Activity(), ColoringView.Listener {
 
         val incoming = incomingUri(intent)
         restoreLastProject(openAfter = incoming)
-        if (!prefs.getBoolean("warnedUninstall", false)) main.postDelayed({ showUninstallWarning() }, 1200)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -87,7 +85,6 @@ class MainActivity : Activity(), ColoringView.Listener {
         // ---- top toolbar ----
         val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         top.addView(button("📚 My Drawings") { showDrawings() })
-        backupBtn = button("⚠ Back up") { showBackupDialog() }.also { top.addView(it) }
         top.addView(button("📂 New from picture") { openPicker() })
         top.addView(button("🌸 New mandala") { startProject(SampleArt.mandala(), "Mandala") })
         top.addView(divider())
@@ -344,7 +341,7 @@ class MainActivity : Activity(), ColoringView.Listener {
         val id = currentId ?: return
         val paint = canvasView.paintLayer?.copy(Bitmap.Config.ARGB_8888, false) ?: return
         val preview = canvasView.renderResult() ?: return
-        io.execute { runCatching { store.saveProgress(id, paint, preview) }; updateBackupState() }
+        io.execute { runCatching { store.saveProgress(id, paint, preview) } }
     }
 
     /** Saves the open drawing, then starts a new one from [art]. */
@@ -448,9 +445,35 @@ class MainActivity : Activity(), ColoringView.Listener {
         grid.setOnItemClickListener { _, _, i, _ -> dialog?.dismiss(); openProject(projects[i].id) }
         grid.setOnItemLongClickListener { _, _, i, _ -> dialog?.dismiss(); projectOptions(projects[i]); true }
 
-        val content: View = if (projects.isEmpty()) TextView(this).apply {
+        val list: View = if (projects.isEmpty()) TextView(this).apply {
             text = "No saved drawings yet."; setPadding(dp(24), dp(24), dp(24), dp(24))
         } else grid
+
+        // Quiet one-line note: drawings are only on this device; back up before uninstalling.
+        val last = prefs.getLong("lastBackup", 0L)
+        val lastText = if (last == 0L) "never backed up" else "last backup " +
+            java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(last))
+        fun link(label: String, onClick: () -> Unit) = TextView(this).apply {
+            text = label; textSize = 14f; setTextColor(0xFF6750A4.toInt())
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            setOnClickListener { dialog?.dismiss(); onClick() }
+        }
+        val callout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(2), dp(4), dp(2))
+            background = roundRect(0xFFF5F2F8.toInt())
+            addView(TextView(context).apply {
+                text = "ⓘ Drawings are saved only on this device. Uninstalling the app deletes them, so back up first ($lastText)."
+                textSize = 13f; setTextColor(0xFF625B71.toInt())
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(link("Back up") { showBackupMenu() })
+            addView(link("Restore") { pickBackupFile() })
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(callout, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(16), 0, dp(16), dp(4)) })
+            addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
+        }
         dialog = AlertDialog.Builder(this)
             .setTitle("My Drawings  ·  tap to open, long-press to rename/delete")
             .setView(content)
@@ -492,68 +515,19 @@ class MainActivity : Activity(), ColoringView.Listener {
 
     override fun onPause() { super.onPause(); saveCurrent() }
 
-    override fun onResume() { super.onResume(); io.execute { updateBackupState() } }
 
     // =====================================================================================
     // Backup guardrail (drawings live inside the app and are deleted on uninstall)
     // =====================================================================================
 
-    /** Call on the io thread. Highlights the backup button when there are unbacked changes. */
-    private fun updateBackupState() {
-        val pending = store.lastChange() > prefs.getLong("lastBackup", 0L)
-        main.post {
-            if (!::backupBtn.isInitialized) return@post
-            backupBtn.text = if (pending) "⚠ Back up" else "✅ Backed up"
-            backupBtn.setTextColor(if (pending) 0xFFB3261E.toInt() else 0xFF1B5E20.toInt())
-            backupBtn.background = roundRect(if (pending) 0xFFFFDAD6.toInt() else Color.TRANSPARENT)
-        }
-    }
-
-    internal fun showUninstallWarning() {
-        prefs.edit().putBoolean("warnedUninstall", true).apply()
-        AlertDialog.Builder(this)
-            .setTitle("⚠ Keep your drawings safe")
-            .setMessage(
-                "Your drawings are stored inside this app. Uninstalling the app (or clearing its data) " +
-                "deletes them permanently.\n\n" +
-                "Android doesn't let apps show their own warning at uninstall time, so:\n" +
-                "• Use the ⚠ Back up button to save a backup file to your Downloads folder. " +
-                "It survives uninstalling and can be restored later.\n" +
-                "• If Android asks \"Keep app data?\" when uninstalling, tick it.\n\n" +
-                "The button turns red whenever you have changes that aren't backed up."
-            )
-            .setPositiveButton("Back up now") { _, _ -> backupZip() }
-            .setNegativeButton("Got it", null)
-            .show()
-    }
-
-    private fun showBackupDialog() {
-        var dialog: AlertDialog? = null
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(8), dp(24), dp(8)) }
-        val last = prefs.getLong("lastBackup", 0L)
-        box.addView(TextView(this).apply {
-            textSize = 15f
-            text = "⚠ Uninstalling this app deletes all drawings stored in it. Keep a backup outside the app.\n\n" +
-                "Last backup: " + (if (last == 0L) "never" else java.text.DateFormat.getDateTimeInstance().format(java.util.Date(last)))
-        })
-        fun action(title: String, sub: String, run: () -> Unit) {
-            box.addView(LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(12))
-                background = roundRect(0xFFF3EDF7.toInt())
-                addView(TextView(context).apply { text = title; textSize = 17f; setTextColor(Color.BLACK) })
-                addView(TextView(context).apply { text = sub; textSize = 13f })
-                setOnClickListener { dialog?.dismiss(); run() }
-            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
-        }
-        action("💾 Save backup file (recommended)",
-            "One .zip in Download/BB Coloring Book with every drawing. Restore it later to keep coloring.") { backupZip() }
-        action("🖼 Export all as PNG pictures",
-            "Finished pictures go to Pictures/BB Coloring Book. Good for sharing, but they can't be resumed.") { exportAllPng() }
-        action("♻ Restore from backup file",
-            "Adds the drawings from a backup .zip. Drawings already here are kept.") { pickBackupFile() }
-        dialog = AlertDialog.Builder(this).setTitle("Back up your drawings")
-            .setView(ScrollView(this).apply { addView(box) })
-            .setNegativeButton("Close", null).show()
+    /** Small menu from the My Drawings callout. */
+    private fun showBackupMenu() {
+        AlertDialog.Builder(this).setTitle("Back up drawings")
+            .setItems(arrayOf(
+                "💾 Save backup file (.zip, can be restored)",
+                "🖼 Export all as PNG pictures",
+            )) { _, which -> if (which == 0) backupZip() else exportAllPng() }
+            .setNegativeButton("Cancel", null).show()
     }
 
     private fun backupZip() {
@@ -575,7 +549,6 @@ class MainActivity : Activity(), ColoringView.Listener {
                 n
             }
             if (result.isSuccess) prefs.edit().putLong("lastBackup", System.currentTimeMillis()).apply()
-            updateBackupState()
             main.post {
                 if (result.isSuccess) toast("Backed up ${result.getOrNull()} drawing(s) to Download/BB Coloring Book")
                 else toast("Backup failed: ${result.exceptionOrNull()?.message}")
