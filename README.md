@@ -1,6 +1,6 @@
 # BB Coloring Book (Android)
 
-Coloring-book app for tablets, built for stylus use (tested target: Xiaomi Pad 6 + Xiaomi Smart Pen).
+Coloring-book app for Android tablets and phones, built for stylus use (Xiaomi Pad 6 + Xiaomi Smart Pen, Samsung S Pen, any Android active stylus).
 
 ## Features
 - Import any picture (gallery/files, or "Share → BB Coloring Book").

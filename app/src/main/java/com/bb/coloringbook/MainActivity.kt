@@ -27,6 +27,14 @@ class MainActivity : Activity(), ColoringView.Listener {
     private lateinit var penBtn: Button
     private lateinit var insideBtn: Button
     private val toolButtons = mutableMapOf<Tool, Button>()
+    /** Toolbar buttons with (icon, word). Phones show only the icon. */
+    private val labeled = mutableListOf<Triple<Button, String, String>>()
+    private lateinit var bottom: LinearLayout
+    private lateinit var bottomControls: LinearLayout
+    private lateinit var seek: SeekBar
+    private lateinit var paletteScroll: HorizontalScrollView
+    /** Narrow screen (phone, or small window). */
+    private val compact get() = resources.configuration.screenWidthDp < 600
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("bb", MODE_PRIVATE) }
@@ -84,30 +92,30 @@ class MainActivity : Activity(), ColoringView.Listener {
 
         // ---- top toolbar ----
         val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        top.addView(button("📚 My Drawings") { showDrawings() })
-        top.addView(button("📂 New from picture") { openPicker() })
-        top.addView(button("🌸 New mandala") { startProject(SampleArt.mandala(), "Mandala") })
+        top.addView(button("📚", "My Drawings") { showDrawings() })
+        top.addView(button("📂", "New from picture") { openPicker() })
+        top.addView(button("🌸", "New mandala") { startProject(SampleArt.mandala(), "Mandala") })
         top.addView(divider())
-        undoBtn = button("↶ Undo") { canvasView.undo() }.also { top.addView(it) }
-        redoBtn = button("↷ Redo") { canvasView.redo() }.also { top.addView(it) }
+        undoBtn = button("↶", "Undo") { canvasView.undo() }.also { top.addView(it) }
+        redoBtn = button("↷", "Redo") { canvasView.redo() }.also { top.addView(it) }
         top.addView(divider())
-        listOf(Tool.BRUSH to "🖌 Brush", Tool.FILL to "🪣 Fill", Tool.ERASER to "🧽 Eraser", Tool.PICKER to "💧 Pick").forEach { (t, label) ->
-            toolButtons[t] = button(label) { canvasView.tool = t; refreshUi() }.also { top.addView(it) }
+        listOf(Tool.BRUSH to ("🖌" to "Brush"), Tool.FILL to ("🎨" to "Fill"), Tool.ERASER to ("🧽" to "Eraser"), Tool.PICKER to ("💧" to "Pick")).forEach { (t, label) ->
+            toolButtons[t] = button(label.first, label.second) { canvasView.tool = t; refreshUi() }.also { top.addView(it) }
         }
         top.addView(divider())
-        insideBtn = button("") {
+        insideBtn = button("🎯", "Inside lines") {
             canvasView.stayInside = !canvasView.stayInside
             prefs.edit().putBoolean("stayInside", canvasView.stayInside).apply(); refreshUi()
         }.also { top.addView(it) }
-        penBtn = button("") {
+        penBtn = button("✍", "Pen only") {
             canvasView.penOnly = !canvasView.penOnly
             prefs.edit().putBoolean("penOnly", canvasView.penOnly).apply(); refreshUi()
         }.also { top.addView(it) }
         top.addView(divider())
-        top.addView(button("⤢ Fit") { canvasView.fitToView() })
-        top.addView(button("🗑 Clear") { confirm("Remove all colors?") { canvasView.clearColors() } })
-        top.addView(button("💾 Save") { saveCurrent(); toast("Progress saved") })
-        top.addView(button("🖼 Export") { saveToGallery() })
+        top.addView(button("⤢", "Fit") { canvasView.fitToView() })
+        top.addView(button("🗑", "Clear") { confirm("Remove all colors?") { canvasView.clearColors() } })
+        top.addView(button("💾", "Save") { saveCurrent(); toast("Progress saved") })
+        top.addView(button("🖼", "Export") { saveToGallery() })
         root.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(top) },
             LinearLayout.LayoutParams(-1, -2))
 
@@ -115,16 +123,14 @@ class MainActivity : Activity(), ColoringView.Listener {
         canvasView = ColoringView(this).also { it.listener = this }
         root.addView(canvasView, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        // ---- bottom: color + size + palette ----
-        val bottom = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8), dp(6), dp(8), dp(6))
-        }
+        // ---- bottom: color + size + palette (one row on tablets, two on phones) ----
+        bottom = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), dp(6), dp(8), dp(6)) }
+        bottomControls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         colorSwatch = View(this).apply { setOnClickListener { showColorDialog() }; contentDescription = "Current color" }
-        bottom.addView(colorSwatch, LinearLayout.LayoutParams(dp(52), dp(52)).apply { marginEnd = dp(8) })
+        bottomControls.addView(colorSwatch, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(8) })
 
-        val sizeLabel = TextView(this).apply { textSize = 14f; minWidth = dp(64) }
-        val seek = SeekBar(this).apply {
+        val sizeLabel = TextView(this).apply { textSize = 14f; minWidth = dp(60) }
+        seek = SeekBar(this).apply {
             max = 119
             progress = (canvasView.brushSize - 1).toInt()
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -137,23 +143,50 @@ class MainActivity : Activity(), ColoringView.Listener {
             })
         }
         sizeLabel.text = "Size ${canvasView.brushSize.toInt()}"
-        bottom.addView(sizeLabel)
-        bottom.addView(seek, LinearLayout.LayoutParams(dp(200), -2))
+        bottomControls.addView(sizeLabel)
+        bottomControls.addView(seek)
 
         paletteRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        bottom.addView(HorizontalScrollView(this).apply { addView(paletteRow) }, LinearLayout.LayoutParams(0, -2, 1f))
+        paletteScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(paletteRow) }
+        bottom.addView(bottomControls); bottom.addView(paletteScroll)
         root.addView(bottom, LinearLayout.LayoutParams(-1, -2))
+        arrangeForScreen()
 
         setContentView(root)
         main.post { seek.progress = (canvasView.brushSize - 1).toInt() }
     }
 
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        arrangeForScreen()
+    }
+
+    /** Phone: icon-only toolbar, palette on its own row. Tablet: labeled toolbar, one bottom row. */
+    private fun arrangeForScreen() {
+        val c = compact
+        labeled.forEach { (b, icon, word) -> b.text = if (c) icon else "$icon $word" }
+        if (c) {
+            bottom.orientation = LinearLayout.VERTICAL
+            bottomControls.layoutParams = LinearLayout.LayoutParams(-1, -2)
+            seek.layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+            paletteScroll.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) }
+        } else {
+            bottom.orientation = LinearLayout.HORIZONTAL
+            bottomControls.layoutParams = LinearLayout.LayoutParams(-2, -2)
+            seek.layoutParams = LinearLayout.LayoutParams(dp(200), -2)
+            paletteScroll.layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
+        }
+        if (::insideBtn.isInitialized) refreshUi()
+    }
+
     private fun dp(v: Int) = (v * d).toInt()
 
-    private fun button(label: String, onClick: () -> Unit) = Button(this).apply {
-        text = label; isAllCaps = false; textSize = 15f
-        minWidth = 0; minimumWidth = 0
-        setPadding(dp(12), 0, dp(12), 0)
+    private fun button(icon: String, word: String, onClick: () -> Unit) = Button(this).apply {
+        text = "$icon $word"; isAllCaps = false; textSize = 15f
+        minWidth = dp(44); minimumWidth = dp(44)
+        tooltipText = word; contentDescription = word
+        labeled.add(Triple(this, icon, word))
+        setPadding(dp(if (compact) 8 else 12), 0, dp(if (compact) 8 else 12), 0)
         background = roundRect(Color.TRANSPARENT)
         setOnClickListener { onClick() }
         layoutParams = LinearLayout.LayoutParams(-2, dp(48)).apply { setMargins(dp(2), dp(4), dp(2), dp(4)) }
@@ -174,9 +207,11 @@ class MainActivity : Activity(), ColoringView.Listener {
     private fun refreshUi() {
         val sel = 0xFFD8C8F0.toInt()
         toolButtons.forEach { (t, b) -> b.background = roundRect(if (t == canvasView.tool) sel else Color.TRANSPARENT) }
-        insideBtn.text = if (canvasView.stayInside) "🎯 Inside lines: ON" else "🎯 Inside lines: OFF"
+        insideBtn.text = if (compact) "🎯" else if (canvasView.stayInside) "🎯 Inside lines: ON" else "🎯 Inside lines: OFF"
+        insideBtn.tooltipText = if (canvasView.stayInside) "Inside lines: ON" else "Inside lines: OFF"
         insideBtn.background = roundRect(if (canvasView.stayInside) sel else Color.TRANSPARENT)
-        penBtn.text = if (canvasView.penOnly) "✍ Pen only: ON" else "✍ Pen only: OFF"
+        penBtn.text = if (compact) "✍" else if (canvasView.penOnly) "✍ Pen only: ON" else "✍ Pen only: OFF"
+        penBtn.tooltipText = if (canvasView.penOnly) "Pen only: ON" else "Pen only: OFF"
         penBtn.background = roundRect(if (canvasView.penOnly) sel else Color.TRANSPARENT)
         undoBtn.isEnabled = canvasView.canUndo(); undoBtn.alpha = if (undoBtn.isEnabled) 1f else 0.4f
         redoBtn.isEnabled = canvasView.canRedo(); redoBtn.alpha = if (redoBtn.isEnabled) 1f else 0.4f
@@ -411,7 +446,7 @@ class MainActivity : Activity(), ColoringView.Listener {
         var dialog: AlertDialog? = null
         val fmt = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT)
         val grid = GridView(this).apply {
-            numColumns = GridView.AUTO_FIT; columnWidth = dp(180)
+            numColumns = GridView.AUTO_FIT; columnWidth = dp(if (compact) 140 else 180)
             horizontalSpacing = dp(12); verticalSpacing = dp(12); stretchMode = GridView.STRETCH_COLUMN_WIDTH
             setPadding(dp(16), dp(8), dp(16), dp(8))
         }
@@ -475,13 +510,13 @@ class MainActivity : Activity(), ColoringView.Listener {
             addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
         }
         dialog = AlertDialog.Builder(this)
-            .setTitle("My Drawings  ·  tap to open, long-press to rename/delete")
+            .setTitle(if (compact) "My Drawings" else "My Drawings  ·  tap to open, long-press to rename/delete")
             .setView(content)
             .setPositiveButton("New from picture") { _, _ -> openPicker() }
             .setNeutralButton("New mandala") { _, _ -> startProject(SampleArt.mandala(), "Mandala") }
             .setNegativeButton("Close", null)
             .show()
-        dialog.window?.setLayout((resources.displayMetrics.widthPixels * 0.85).toInt(), (resources.displayMetrics.heightPixels * 0.85).toInt())
+        dialog.window?.setLayout((resources.displayMetrics.widthPixels * if (compact) 0.95 else 0.85).toInt(), (resources.displayMetrics.heightPixels * 0.85).toInt())
     }
 
     private fun projectOptions(p: ProjectStore.Project) {
