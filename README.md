@@ -6,7 +6,7 @@ Coloring-book app for Android tablets and phones, built for stylus use (Xiaomi P
 - Import any picture (gallery/files, or "Share → BB Coloring Book").
 - Fill tool: tap a region to fill it.
 - Brush: pressure-sensitive stylus strokes.
-- "Inside lines": strokes stay inside the region where they start.
+- "No spill": brush strokes stay inside the shape where they start, even if the pen slips over a line.
 - Pen-only mode (auto on when a stylus is detected): pen draws, fingers pan/pinch-zoom, palm is ignored.
 - Stylus side button or eraser tip = eraser. Hover shows a brush cursor.
 - Any color: HSV picker + hex input; recent colors remembered.

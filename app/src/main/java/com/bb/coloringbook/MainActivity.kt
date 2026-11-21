@@ -103,9 +103,11 @@ class MainActivity : Activity(), ColoringView.Listener {
             toolButtons[t] = button(label.first, label.second) { canvasView.tool = t; refreshUi() }.also { top.addView(it) }
         }
         top.addView(divider())
-        insideBtn = button("🎯", "Inside lines") {
+        insideBtn = button("🛡", "No spill") {
             canvasView.stayInside = !canvasView.stayInside
             prefs.edit().putBoolean("stayInside", canvasView.stayInside).apply(); refreshUi()
+            toast(if (canvasView.stayInside) "No spill ON: color stays inside the shape you start in, even if your pen slips over a line"
+                  else "No spill OFF: the brush paints freely across outlines, like a real pen")
         }.also { top.addView(it) }
         penBtn = button("✍", "Pen only") {
             canvasView.penOnly = !canvasView.penOnly
@@ -207,8 +209,8 @@ class MainActivity : Activity(), ColoringView.Listener {
     private fun refreshUi() {
         val sel = 0xFFD8C8F0.toInt()
         toolButtons.forEach { (t, b) -> b.background = roundRect(if (t == canvasView.tool) sel else Color.TRANSPARENT) }
-        insideBtn.text = if (compact) "🎯" else if (canvasView.stayInside) "🎯 Inside lines: ON" else "🎯 Inside lines: OFF"
-        insideBtn.tooltipText = if (canvasView.stayInside) "Inside lines: ON" else "Inside lines: OFF"
+        insideBtn.text = if (compact) "🛡" else if (canvasView.stayInside) "🛡 No spill: ON" else "🛡 No spill: OFF"
+        insideBtn.tooltipText = if (canvasView.stayInside) "No spill: ON (color stays inside the shape)" else "No spill: OFF (brush crosses outlines)"
         insideBtn.background = roundRect(if (canvasView.stayInside) sel else Color.TRANSPARENT)
         penBtn.text = if (compact) "✍" else if (canvasView.penOnly) "✍ Pen only: ON" else "✍ Pen only: OFF"
         penBtn.tooltipText = if (canvasView.penOnly) "Pen only: ON" else "Pen only: OFF"
